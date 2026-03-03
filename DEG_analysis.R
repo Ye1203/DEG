@@ -1,7 +1,5 @@
 library(shiny)
-
-# ------------------- Parameters -------------------
-DEBUG <- TRUE  # Set TRUE to show debug button
+library(shinyjs)
 
 # ============================================================
 # -------------------- Utility Functions ---------------------
@@ -14,7 +12,7 @@ load_data_object <- function(path) {
 
 extract_meta_columns <- function(data) {
   if (!"meta.data" %in% slotNames(data)) return(NULL)
-  colnames(data@meta.data)
+  c("",colnames(data@meta.data))
 }
 
 extract_unique_values <- function(data, column_name) {
@@ -36,56 +34,141 @@ generate_combinations <- function(values) {
 
 comparisonTableUI <- function(id, title_prefix) {
   ns <- NS(id)
-  tagList(
-    uiOutput(ns("table_ui"))
-  )
+  uiOutput(ns("table_ui"))
 }
 
 comparisonTableServer <- function(id, column_values, prefix) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    rv <- reactiveValues(rows = list())
+    rv <- reactiveValues(rows = list(list(numerator = NULL, denominator = NULL)))
     
     add_row <- function(num = NULL, den = NULL) {
       rv$rows[[length(rv$rows) + 1]] <- list(numerator = num, denominator = den)
     }
     
     observeEvent(input$add_all, {
-      rv$rows <- list()
-      comb <- generate_combinations(column_values())
-      if (nrow(comb) > 0) apply(comb, 1, function(x) add_row(x[1], x[2]))
-    })
-    
-    observeEvent(input$remove_all, { rv$rows <- list() })
-    observeEvent(input$add_row, { add_row() })
-    
-    output$table_ui <- renderUI({
-      if (length(rv$rows) == 0) {
-        actionButton(ns("add_row"), "Add Row")
+      values <- column_values()
+      if (length(values) > 1) {
+        comb <- t(combn(values, 2))
+        rv$rows <- lapply(1:nrow(comb), function(i) {
+          list(numerator = comb[i, 1], denominator = comb[i, 2])
+        })
       } else {
-        tagList(
-          lapply(seq_along(rv$rows), function(i) {
-            fluidRow(
-              column(2, strong(paste0(prefix, i))),
-              column(3, selectInput(ns(paste0("num_", i)), "Treatment (numerator)",
-                                    choices = column_values(), selected = rv$rows[[i]]$numerator)),
-              column(3, selectInput(ns(paste0("den_", i)), "Control (denominator)",
-                                    choices = column_values(), selected = rv$rows[[i]]$denominator)),
-              column(2, actionButton(ns(paste0("delete_", i)), "Delete"))
-            )
-          }),
-          br(),
-          actionButton(ns("add_row"), "Add Row")
-        )
+        rv$rows <- list(list(numerator = NULL, denominator = NULL))
       }
     })
     
+    observeEvent(input$remove_all, {
+      rv$rows <- list(list(numerator = NULL, denominator = NULL))
+    })
+    
+    observeEvent(input$add_row, {
+      add_row()
+    })
+    
+    delete_observers <- list()
+    exchange_observers <- list()
+    num_observers <- list()
+    den_observers <- list()
+    
     observe({
-      lapply(seq_along(rv$rows), function(i) {
-        observeEvent(input[[paste0("delete_", i)]], {
-          rv$rows <- rv$rows[-i]
-        }, ignoreInit = TRUE)
-      })
+      current_rows <- length(rv$rows)
+      existing_observers <- length(delete_observers)
+      
+      if (current_rows < existing_observers) {
+        for (i in (current_rows + 1):existing_observers) {
+          if (!is.null(delete_observers[[i]])) delete_observers[[i]]$destroy()
+          if (!is.null(exchange_observers[[i]])) exchange_observers[[i]]$destroy()
+          if (!is.null(num_observers[[i]])) num_observers[[i]]$destroy()
+          if (!is.null(den_observers[[i]])) den_observers[[i]]$destroy()
+        }
+        delete_observers <<- delete_observers[1:current_rows]
+        exchange_observers <<- exchange_observers[1:current_rows]
+        num_observers <<- num_observers[1:current_rows]
+        den_observers <<- den_observers[1:current_rows]
+      }
+      
+      if (current_rows > length(delete_observers)) {
+        for (i in (length(delete_observers) + 1):current_rows) {
+          delete_observers[[i]] <<- observeEvent(input[[paste0("delete_", i)]], {
+            current_rows <- rv$rows
+            if (i <= length(current_rows)) {
+              new_rows <- current_rows[-i]
+              if (length(new_rows) == 0) {
+                new_rows <- list(list(numerator = NULL, denominator = NULL))
+              }
+              rv$rows <- new_rows
+            }
+          }, ignoreInit = TRUE, autoDestroy = FALSE)
+          
+          exchange_observers[[i]] <<- observeEvent(input[[paste0("exchange_", i)]], {
+            if (i <= length(rv$rows)) {
+              current_num <- rv$rows[[i]]$numerator
+              current_den <- rv$rows[[i]]$denominator
+              rv$rows[[i]]$numerator <- current_den
+              rv$rows[[i]]$denominator <- current_num
+            }
+          }, ignoreInit = TRUE, autoDestroy = FALSE)
+          
+          num_observers[[i]] <<- observeEvent(input[[paste0("num_", i)]], {
+            if (i <= length(rv$rows)) {
+              rv$rows[[i]]$numerator <- input[[paste0("num_", i)]]
+            }
+          }, ignoreInit = TRUE, autoDestroy = FALSE)
+          
+          den_observers[[i]] <<- observeEvent(input[[paste0("den_", i)]], {
+            if (i <= length(rv$rows)) {
+              rv$rows[[i]]$denominator <- input[[paste0("den_", i)]]
+            }
+          }, ignoreInit = TRUE, autoDestroy = FALSE)
+        }
+      }
+    })
+    
+    output$table_ui <- renderUI({
+      req(column_values())
+      tagList(
+        fluidRow(
+          div(
+            style = "display: inline-block; vertical-align: middle; margin-left:20px;",
+            actionButton(ns("add_all"), "Add All Comparison", class = "btn-primary", width = "100%")
+          ),
+          div(
+            style = "display: inline-block; vertical-align: middle; margin-left:5px;",
+            actionButton(ns("remove_all"), "Remove All", class = "btn-warning", width = "100%")
+          ),
+          div(
+            style = "display: inline-block; vertical-align: middle; margin-left:5px;",
+            actionButton(ns("add_row"), "Add One Row", class = "btn-success", width = "100%")
+          )),
+        br(),
+        fluidRow(
+          column(1, strong("Index")),
+          column(3, strong("Treatment (numerator)"), style = "text-align:center;"),
+          column(3, strong("Control (denominator)"), style = "text-align:center;"),
+          column(2, strong("Swap N/E")),
+          column(2, strong("Action"))
+        ),
+        lapply(seq_along(rv$rows), function(i) {
+          fluidRow(
+            style = "margin-top: 5px;",
+            column(1, div(style = "margin-top: 2.5px;",
+                          strong(paste0(prefix, i)))),
+            column(3, selectInput(ns(paste0("num_", i)), NULL,
+                                  choices = column_values(), selected = rv$rows[[i]]$numerator,
+                                  width = "100%")),
+            column(3, selectInput(ns(paste0("den_", i)), NULL,
+                                  choices = column_values(), selected = rv$rows[[i]]$denominator,
+                                  width = "100%")),
+            column(2, actionButton(ns(paste0("exchange_", i)), "⇄ Swap",
+                                   style = "color:#fff;background-color:#337ab7;border-color:#2e6da4;",
+                                   width = "100%")),
+            column(2, actionButton(ns(paste0("delete_", i)), "✕ Delete",
+                                   style = "color:#fff;background-color:#d9534f;border-color:#d43f3a;",
+                                   width = "100%"))
+          )
+        })
+      )
     })
     
     return(reactive(rv$rows))
@@ -97,44 +180,21 @@ comparisonTableServer <- function(id, column_values, prefix) {
 # ============================================================
 
 ui <- fluidPage(
+  useShinyjs(),
   titlePanel("Analysis Application"),
   
-  # Data path input
+  h4("Input Data Path"),
   fluidRow(
-    column(9, textInput("data_path", "Input data path")),
-    column(3, br(), actionButton("load_data", "Load Data"))
+    column(9, textInput("data_path", value = "/projectnb/wax-es/00_shinyapp/Clustering/file/G193_Male.rds", label = NULL, width = "100%")),
+    column(3, actionButton("load_data", "Load Data", class = "btn-success"))
   ),
   
-  tags$hr(),
-  
-  # Debug button if DEBUG = TRUE
-  conditionalPanel(
-    condition = paste0(DEBUG),
-    absolutePanel(bottom = 10, left = 10,
-                  actionButton("debug_btn", "DEBUG"))
-  ),
-  
-  # Hidden step state
-  tags$script(HTML("
-    Shiny.setInputValue('step_state', 1);
-    Shiny.addCustomMessageHandler('setStep', function(value) {
-      Shiny.setInputValue('step_state', value, {priority: 'event'});
-    });
-  ")),
-  
-  # Tabset
   tabsetPanel(
     id = "main_tabs",
-    
-    tabPanel(
-      "Data processing",
-      
-      # Show UI only if data_obj() is not NULL
-      uiOutput("data_processing_ui")
-    ),
-    
-    tabPanel("Visualization", h3("Visualization content will be defined later."))
-  )
+    tabPanel("Data processing", uiOutput("data_processing_ui")),
+    tabPanel("Visualization", uiOutput("visualization_ui"))
+  ),
+  br(),br(),br(),br(),br(),br()
 )
 
 # ============================================================
@@ -145,28 +205,12 @@ server <- function(input, output, session) {
   
   data_obj <- reactiveVal(NULL)
   
-  # ----------------- DEBUG button -----------------
-  if (DEBUG) {
-    observeEvent(input$debug_btn, { browser() })
-  }
-  
   # ----------------- Load Data -----------------
   observeEvent(input$load_data, {
     showModal(modalDialog(title = "Loading Data", "Please wait...", footer = NULL, easyClose = FALSE))
     tryCatch({
-      withProgress(message = "Reading file...", value = 0, {
-        incProgress(0.3)
-        obj <- load_data_object(input$data_path)
-        data_obj(obj)
-        incProgress(0.6)
-        cols <- extract_meta_columns(obj)
-        updateSelectInput(session, "sample_column", choices = cols)
-        updateSelectInput(session, "cluster_column", choices = cols)
-        # Initialize modules with one row
-        session$sendInputMessage("sample_table-add_row", list(value = 1))
-        session$sendInputMessage("cluster_table-add_row", list(value = 1))
-        incProgress(1)
-      })
+      obj <- load_data_object(input$data_path)
+      data_obj(obj)
       removeModal()
       showNotification("Data loaded successfully!", type = "message")
     }, error = function(e) {
@@ -176,53 +220,49 @@ server <- function(input, output, session) {
   })
   
   # ----------------- Reactive unique values -----------------
-  sample_values <- reactive({ req(data_obj(), input$sample_column)
-    extract_unique_values(data_obj(), input$sample_column) })
-  cluster_values <- reactive({ req(data_obj(), input$cluster_column)
-    extract_unique_values(data_obj(), input$cluster_column) })
+  sample_values <- reactive({
+    req(data_obj(), input$sample_column)
+    extract_unique_values(data_obj(), input$sample_column)
+  })
+  
+  cluster_values <- reactive({
+    req(data_obj(), input$cluster_column)
+    extract_unique_values(data_obj(), input$cluster_column)
+  })
   
   # ----------------- Modules -----------------
   sample_rows <- comparisonTableServer("sample_table", sample_values, prefix = "S")
   cluster_rows <- comparisonTableServer("cluster_table", cluster_values, prefix = "C")
   
-  # ----------------- Top buttons -----------------
-  observeEvent(input$sample_add_all, { session$sendInputMessage("sample_table-add_all", list(value = 1)) })
-  observeEvent(input$sample_remove_all, { session$sendInputMessage("sample_table-remove_all", list(value = 1)) })
-  observeEvent(input$cluster_add_all, { session$sendInputMessage("cluster_table-add_all", list(value = 1)) })
-  observeEvent(input$cluster_remove_all, { session$sendInputMessage("cluster_table-remove_all", list(value = 1)) })
-  
-  # ----------------- Step navigation -----------------
-  observeEvent(input$next_step, { session$sendCustomMessage("setStep", 2) })
-  observeEvent(input$back_step, { session$sendCustomMessage("setStep", 1) })
-  
   # ----------------- Data Processing UI -----------------
   output$data_processing_ui <- renderUI({
-    req(data_obj())  # Only show after data loaded
-    
-    # Step 1 UI
-    conditionalPanel(
-      condition = "input.step_state == 1",
-      fluidRow(
-        column(6, selectInput("sample_column", "meta.data sample column", choices = NULL)),
-        column(6, selectInput("cluster_column", "meta.data cluster column", choices = NULL))
-      ),
-      hr(),
-      h3("Sample Analysis"),
-      fluidRow(
-        column(6, actionButton("sample_add_all", "Add All Comparison")),
-        column(6, actionButton("sample_remove_all", "Remove All Comparison"))
-      ),
-      comparisonTableUI("sample_table", "S"),
-      hr(),
-      h3("Cluster Analysis"),
-      fluidRow(
-        column(6, actionButton("cluster_add_all", "Add All Comparison")),
-        column(6, actionButton("cluster_remove_all", "Remove All Comparison"))
-      ),
-      comparisonTableUI("cluster_table", "C"),
-      hr(),
-      actionButton("next_step", "NEXT STEP")
-    )
+    if (is.null(data_obj())) {
+      h4("Please load data first.")
+    } else {
+      tagList(
+        fluidRow(
+          column(6, selectInput("sample_column", "meta.data sample column", choices = extract_meta_columns(data_obj()))),
+          column(6, selectInput("cluster_column", "meta.data cluster column", choices = extract_meta_columns(data_obj())))
+        ),
+        hr(),
+        h3("Sample Analysis"),
+        comparisonTableUI("sample_table", "S"),
+        hr(),
+        h3("Cluster Analysis"),
+        comparisonTableUI("cluster_table", "C")
+      )
+    }
+  })
+  
+  # ----------------- Visualization UI -----------------
+  output$visualization_ui <- renderUI({
+    if (is.null(data_obj())) {
+      h4("Please load data first.")
+    } else {
+      tagList(
+        h3("Visualization will be implemented here")
+      )
+    }
   })
 }
 
