@@ -234,24 +234,102 @@ server <- function(input, output, session) {
   sample_rows <- comparisonTableServer("sample_table", sample_values, prefix = "S")
   cluster_rows <- comparisonTableServer("cluster_table", cluster_values, prefix = "C")
   
+  # ----------------- Step navigation -----------------
+  observeEvent(input$next_step, {
+    sample_comparisons <- sample_rows()
+    cluster_comparisons <- cluster_rows()
+    
+    # Check if at least one comparison is selected (not NULL)
+    has_sample <- any(sapply(sample_comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator)))
+    has_cluster <- any(sapply(cluster_comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator)))
+    
+    if (!has_sample && !has_cluster) {
+      showModal(modalDialog(
+        title = "No Comparisons Selected",
+        "Please add at least one comparison for Sample or Cluster analysis before proceeding.",
+        easyClose = TRUE,
+        footer = modalButton("OK")
+      ))
+    } else {
+      shinyjs::hide("step1_ui")
+      shinyjs::show("step2_ui")
+    }
+  })
+  
+  observeEvent(input$back_step, {
+    shinyjs::show("step1_ui")
+    shinyjs::hide("step2_ui")
+  })
+  
   # ----------------- Data Processing UI -----------------
   output$data_processing_ui <- renderUI({
     if (is.null(data_obj())) {
       h4("Please load data first.")
     } else {
       tagList(
-        fluidRow(
-          column(6, selectInput("sample_column", "meta.data sample column", choices = extract_meta_columns(data_obj()))),
-          column(6, selectInput("cluster_column", "meta.data cluster column", choices = extract_meta_columns(data_obj())))
+        # Step 1 (original content wrapped in div)
+        div(id = "step1_ui",
+            fluidRow(
+              column(6, selectInput("sample_column", "meta.data sample column", choices = extract_meta_columns(data_obj()))),
+              column(6, selectInput("cluster_column", "meta.data cluster column", choices = extract_meta_columns(data_obj())))
+            ),
+            hr(),
+            h3("Sample Analysis"),
+            comparisonTableUI("sample_table", "S"),
+            hr(),
+            h3("Cluster Analysis"),
+            comparisonTableUI("cluster_table", "C"),
+            hr(),
+            actionButton("next_step", "NEXT STEP", class = "btn-primary", style = "width:200px;")
         ),
-        hr(),
-        h3("Sample Analysis"),
-        comparisonTableUI("sample_table", "S"),
-        hr(),
-        h3("Cluster Analysis"),
-        comparisonTableUI("cluster_table", "C")
+        
+        # Step 2 (hidden initially)
+        div(id = "step2_ui", style = "display: none;",
+            h4("Sample Comparisons:"),
+            uiOutput("sample_comparisons_summary"),
+            hr(),
+            h4("Cluster Comparisons:"),
+            uiOutput("cluster_comparisons_summary"),
+            hr(),
+            actionButton("back_step", "Back to Step 1", class = "btn-warning", style = "width:200px;")
+        )
       )
     }
+  })
+  
+  # ----------------- Generate comparison summaries -----------------
+  output$sample_comparisons_summary <- renderUI({
+    comparisons <- sample_rows()
+    # Filter out rows with NULL values
+    valid_comparisons <- comparisons[sapply(comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator))]
+    
+    if (length(valid_comparisons) == 0) {
+      return(p("No valid sample comparisons selected."))
+    }
+    
+    tags$ul(
+      lapply(seq_along(valid_comparisons), function(i) {
+        comp <- valid_comparisons[[i]]
+        tags$li(sprintf("Comparison %d: %s vs %s", i, comp$numerator, comp$denominator))
+      })
+    )
+  })
+  
+  output$cluster_comparisons_summary <- renderUI({
+    comparisons <- cluster_rows()
+    # Filter out rows with NULL values
+    valid_comparisons <- comparisons[sapply(comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator))]
+    
+    if (length(valid_comparisons) == 0) {
+      return(p("No valid cluster comparisons selected."))
+    }
+    
+    tags$ul(
+      lapply(seq_along(valid_comparisons), function(i) {
+        comp <- valid_comparisons[[i]]
+        tags$li(sprintf("Comparison %d: %s vs %s", i, comp$numerator, comp$denominator))
+      })
+    )
   })
   
   # ----------------- Visualization UI -----------------
