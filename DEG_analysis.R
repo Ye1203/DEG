@@ -40,90 +40,8 @@ comparisonTableUI <- function(id, title_prefix) {
 comparisonTableServer <- function(id, column_values, prefix) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    rv <- reactiveValues(rows = list(list(numerator = NULL, denominator = NULL)))
-    
-    add_row <- function(num = NULL, den = NULL) {
-      rv$rows[[length(rv$rows) + 1]] <- list(numerator = num, denominator = den)
-    }
-    
-    observeEvent(input$add_all, {
-      values <- column_values()
-      if (length(values) > 1) {
-        comb <- t(combn(values, 2))
-        rv$rows <- lapply(1:nrow(comb), function(i) {
-          list(numerator = comb[i, 1], denominator = comb[i, 2])
-        })
-      } else {
-        rv$rows <- list(list(numerator = NULL, denominator = NULL))
-      }
-    })
-    
-    observeEvent(input$remove_all, {
-      rv$rows <- list(list(numerator = NULL, denominator = NULL))
-    })
-    
-    observeEvent(input$add_row, {
-      add_row()
-    })
-    
-    delete_observers <- list()
-    exchange_observers <- list()
-    num_observers <- list()
-    den_observers <- list()
-    
-    observe({
-      current_rows <- length(rv$rows)
-      existing_observers <- length(delete_observers)
-      
-      if (current_rows < existing_observers) {
-        for (i in (current_rows + 1):existing_observers) {
-          if (!is.null(delete_observers[[i]])) delete_observers[[i]]$destroy()
-          if (!is.null(exchange_observers[[i]])) exchange_observers[[i]]$destroy()
-          if (!is.null(num_observers[[i]])) num_observers[[i]]$destroy()
-          if (!is.null(den_observers[[i]])) den_observers[[i]]$destroy()
-        }
-        delete_observers <<- delete_observers[1:current_rows]
-        exchange_observers <<- exchange_observers[1:current_rows]
-        num_observers <<- num_observers[1:current_rows]
-        den_observers <<- den_observers[1:current_rows]
-      }
-      
-      if (current_rows > length(delete_observers)) {
-        for (i in (length(delete_observers) + 1):current_rows) {
-          delete_observers[[i]] <<- observeEvent(input[[paste0("delete_", i)]], {
-            current_rows <- rv$rows
-            if (i <= length(current_rows)) {
-              new_rows <- current_rows[-i]
-              if (length(new_rows) == 0) {
-                new_rows <- list(list(numerator = NULL, denominator = NULL))
-              }
-              rv$rows <- new_rows
-            }
-          }, ignoreInit = TRUE, autoDestroy = FALSE)
-          
-          exchange_observers[[i]] <<- observeEvent(input[[paste0("exchange_", i)]], {
-            if (i <= length(rv$rows)) {
-              current_num <- rv$rows[[i]]$numerator
-              current_den <- rv$rows[[i]]$denominator
-              rv$rows[[i]]$numerator <- current_den
-              rv$rows[[i]]$denominator <- current_num
-            }
-          }, ignoreInit = TRUE, autoDestroy = FALSE)
-          
-          num_observers[[i]] <<- observeEvent(input[[paste0("num_", i)]], {
-            if (i <= length(rv$rows)) {
-              rv$rows[[i]]$numerator <- input[[paste0("num_", i)]]
-            }
-          }, ignoreInit = TRUE, autoDestroy = FALSE)
-          
-          den_observers[[i]] <<- observeEvent(input[[paste0("den_", i)]], {
-            if (i <= length(rv$rows)) {
-              rv$rows[[i]]$denominator <- input[[paste0("den_", i)]]
-            }
-          }, ignoreInit = TRUE, autoDestroy = FALSE)
-        }
-      }
-    })
+    rv <- reactiveValues(rows = list())
+    row_count <- reactiveVal(0)
     
     output$table_ui <- renderUI({
       req(column_values())
@@ -140,35 +58,128 @@ comparisonTableServer <- function(id, column_values, prefix) {
           div(
             style = "display: inline-block; vertical-align: middle; margin-left:5px;",
             actionButton(ns("add_row"), "Add One Row", class = "btn-success", width = "100%")
-          )),
+          )
+        ),
         br(),
         fluidRow(
-          column(1, strong("Index")),
           column(3, strong("Treatment (numerator)"), style = "text-align:center;"),
           column(3, strong("Control (denominator)"), style = "text-align:center;"),
           column(2, strong("Swap N/E")),
           column(2, strong("Action"))
         ),
-        lapply(seq_along(rv$rows), function(i) {
+        br(),
+        div(id = ns("rows_container"))
+      )
+    })
+    
+    add_row_ui <- function(num = NULL, den = NULL, index = NULL) {
+      if (is.null(index)) {
+        index <- row_count() + 1
+        row_count(index)
+      }
+      
+      row_id <- paste0("row_", index)
+      
+      insertUI(
+        selector = paste0("#", ns("rows_container")),
+        where = "beforeEnd",
+        ui = div(
+          id = ns(row_id),
           fluidRow(
             style = "margin-top: 5px;",
-            column(1, div(style = "margin-top: 2.5px;",
-                          strong(paste0(prefix, i)))),
-            column(3, selectInput(ns(paste0("num_", i)), NULL,
-                                  choices = column_values(), selected = rv$rows[[i]]$numerator,
+            column(3, selectInput(ns(paste0("num_", index)), NULL,
+                                  choices = column_values(), selected = num,
                                   width = "100%")),
-            column(3, selectInput(ns(paste0("den_", i)), NULL,
-                                  choices = column_values(), selected = rv$rows[[i]]$denominator,
+            column(3, selectInput(ns(paste0("den_", index)), NULL,
+                                  choices = column_values(), selected = den,
                                   width = "100%")),
-            column(2, actionButton(ns(paste0("exchange_", i)), "⇄ Swap",
+            column(2, actionButton(ns(paste0("exchange_", index)), "⇄ Swap",
                                    style = "color:#fff;background-color:#337ab7;border-color:#2e6da4;",
                                    width = "100%")),
-            column(2, actionButton(ns(paste0("delete_", i)), "✕ Delete",
+            column(2, actionButton(ns(paste0("delete_", index)), "✕ Delete",
                                    style = "color:#fff;background-color:#d9534f;border-color:#d43f3a;",
                                    width = "100%"))
           )
-        })
+        )
       )
+      
+      new_rows <- rv$rows
+      new_rows[[index]] <- list(numerator = num, denominator = den)
+      rv$rows <- new_rows
+      
+      local({
+        row_idx <- index
+        
+        observeEvent(input[[paste0("delete_", row_idx)]], {
+          removeUI(selector = paste0("#", ns(paste0("row_", row_idx))))
+          
+          new_rows <- rv$rows
+          new_rows[[row_idx]] <- NULL
+          rv$rows <- new_rows[!sapply(new_rows, is.null)]
+        }, ignoreInit = TRUE)
+        
+        observeEvent(input[[paste0("exchange_", row_idx)]], {
+          current_rows <- isolate(rv$rows)
+          if (!is.null(current_rows[[row_idx]])) {
+            current_num <- current_rows[[row_idx]]$numerator
+            current_den <- current_rows[[row_idx]]$denominator
+            
+            updateSelectInput(session, paste0("num_", row_idx), selected = current_den)
+            updateSelectInput(session, paste0("den_", row_idx), selected = current_num)
+            
+            new_rows <- rv$rows
+            new_rows[[row_idx]]$numerator <- current_den
+            new_rows[[row_idx]]$denominator <- current_num
+            rv$rows <- new_rows
+          }
+        }, ignoreInit = TRUE)
+        
+        observeEvent(input[[paste0("num_", row_idx)]], {
+          new_rows <- rv$rows
+          if (!is.null(new_rows[[row_idx]])) {
+            new_rows[[row_idx]]$numerator <- input[[paste0("num_", row_idx)]]
+            rv$rows <- new_rows
+          }
+        }, ignoreInit = TRUE)
+        
+        observeEvent(input[[paste0("den_", row_idx)]], {
+          new_rows <- rv$rows
+          if (!is.null(new_rows[[row_idx]])) {
+            new_rows[[row_idx]]$denominator <- input[[paste0("den_", row_idx)]]
+            rv$rows <- new_rows
+          }
+        }, ignoreInit = TRUE)
+      })
+    }
+    
+    clear_all_rows <- function() {
+      for (i in seq_along(rv$rows)) {
+        if (!is.null(rv$rows[[i]])) {
+          removeUI(selector = paste0("#", ns(paste0("row_", i))), immediate = TRUE)
+        }
+      }
+      rv$rows <- list()
+      row_count(0)
+    }
+    
+    observeEvent(input$add_row, {
+      add_row_ui()
+    })
+    
+    observeEvent(input$add_all, {
+      values <- column_values()
+      if (length(values) > 1) {
+        clear_all_rows()
+        comb <- t(combn(values, 2))
+        for (i in 1:nrow(comb)) {
+          add_row_ui(num = comb[i, 1], den = comb[i, 2], index = i)
+        }
+        row_count(nrow(comb))
+      }
+    })
+    
+    observeEvent(input$remove_all, {
+      clear_all_rows()
     })
     
     return(reactive(rv$rows))
