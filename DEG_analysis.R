@@ -73,13 +73,10 @@ comparisonTableServer <- function(id, column_values, prefix) {
       )
     })
     
-    add_row_ui <- function(num = NULL, den = NULL, index = NULL) {
-      if (is.null(index)) {
-        index <- row_count() + 1
-        row_count(index)
-      }
-      
-      row_id <- paste0("row_", index)
+    add_row_ui <- function(num = NULL, den = NULL) {
+      row_idx <- as.character(Sys.time())
+      row_idx <- gsub("[^0-9]", "", row_idx)  
+      row_id <- paste0("row_", row_idx)
       
       insertUI(
         selector = paste0("#", ns("rows_container")),
@@ -88,105 +85,379 @@ comparisonTableServer <- function(id, column_values, prefix) {
           id = ns(row_id),
           fluidRow(
             style = "margin-top: 5px;",
-            column(3, selectInput(ns(paste0("num_", index)), NULL,
+            column(3, selectInput(ns(paste0("num_", row_id)), NULL,
                                   choices = column_values(), selected = num,
                                   width = "100%")),
-            column(3, selectInput(ns(paste0("den_", index)), NULL,
+            column(3, selectInput(ns(paste0("den_", row_id)), NULL,
                                   choices = column_values(), selected = den,
                                   width = "100%")),
-            column(2, actionButton(ns(paste0("exchange_", index)), "⇄ Swap",
+            column(2, actionButton(ns(paste0("exchange_", row_id)), "⇄ Swap",
                                    style = "color:#fff;background-color:#337ab7;border-color:#2e6da4;",
                                    width = "100%")),
-            column(2, actionButton(ns(paste0("delete_", index)), "✕ Delete",
+            column(2, actionButton(ns(paste0("delete_", row_id)), "✕ Delete",
                                    style = "color:#fff;background-color:#d9534f;border-color:#d43f3a;",
                                    width = "100%"))
           )
         )
       )
       
-      new_rows <- rv$rows
-      new_rows[[index]] <- list(numerator = num, denominator = den)
-      rv$rows <- new_rows
+      rv$rows[[row_id]] <- list(numerator = num, denominator = den)
       
-      local({
-        row_idx <- index
+      # DELETE
+      observeEvent(input[[paste0("delete_", row_id)]], {
+        removeUI(selector = paste0("#", ns(row_id)))
+        rv$rows[[row_id]] <- NULL
+      }, ignoreInit = TRUE)
+      
+      # SWAP
+      observeEvent(input[[paste0("exchange_", row_id)]], {
+        row <- isolate(rv$rows[[row_id]])
+        if (is.null(row)) return()
         
-        observeEvent(input[[paste0("delete_", row_idx)]], {
-          removeUI(selector = paste0("#", ns(paste0("row_", row_idx))))
-          
-          new_rows <- rv$rows
-          new_rows[[row_idx]] <- NULL
-          rv$rows <- new_rows[!sapply(new_rows, is.null)]
-        }, ignoreInit = TRUE)
+        updateSelectInput(session, paste0("num_", row_id), selected = row$denominator)
+        updateSelectInput(session, paste0("den_", row_id), selected = row$numerator)
         
-        observeEvent(input[[paste0("exchange_", row_idx)]], {
-          current_rows <- isolate(rv$rows)
-          if (!is.null(current_rows[[row_idx]])) {
-            current_num <- current_rows[[row_idx]]$numerator
-            current_den <- current_rows[[row_idx]]$denominator
-            
-            updateSelectInput(session, paste0("num_", row_idx), selected = current_den)
-            updateSelectInput(session, paste0("den_", row_idx), selected = current_num)
-            
-            new_rows <- rv$rows
-            new_rows[[row_idx]]$numerator <- current_den
-            new_rows[[row_idx]]$denominator <- current_num
-            rv$rows <- new_rows
-          }
-        }, ignoreInit = TRUE)
-        
-        observeEvent(input[[paste0("num_", row_idx)]], {
-          new_rows <- rv$rows
-          if (!is.null(new_rows[[row_idx]])) {
-            new_rows[[row_idx]]$numerator <- input[[paste0("num_", row_idx)]]
-            rv$rows <- new_rows
-          }
-        }, ignoreInit = TRUE)
-        
-        observeEvent(input[[paste0("den_", row_idx)]], {
-          new_rows <- rv$rows
-          if (!is.null(new_rows[[row_idx]])) {
-            new_rows[[row_idx]]$denominator <- input[[paste0("den_", row_idx)]]
-            rv$rows <- new_rows
-          }
-        }, ignoreInit = TRUE)
-      })
+        rv$rows[[row_id]]$numerator <- row$denominator
+        rv$rows[[row_id]]$denominator <- row$numerator
+      }, ignoreInit = TRUE)
+      
+      observeEvent(input[[paste0("num_", row_id)]], {
+        row <- isolate(rv$rows[[row_id]])
+        if (is.null(row)) return()
+        rv$rows[[row_id]]$numerator <- input[[paste0("num_", row_id)]]
+      }, ignoreInit = TRUE)
+      
+      observeEvent(input[[paste0("den_", row_id)]], {
+        row <- isolate(rv$rows[[row_id]])
+        if (is.null(row)) return()
+        rv$rows[[row_id]]$denominator <- input[[paste0("den_", row_id)]]
+      }, ignoreInit = TRUE)
+      
+      row_count(length(rv$rows))
     }
     
     clear_all_rows <- function() {
-      for (i in seq_along(rv$rows)) {
-        if (!is.null(rv$rows[[i]])) {
-          removeUI(selector = paste0("#", ns(paste0("row_", i))), immediate = TRUE)
-        }
-      }
+      lapply(names(rv$rows), function(rid) {
+        removeUI(selector = paste0("#", ns(rid)), immediate = TRUE)
+      })
       rv$rows <- list()
       row_count(0)
     }
     
-    observeEvent(input$add_row, {
-      add_row_ui()
-    })
+    observeEvent(input$add_row, { add_row_ui() })
     
     observeEvent(input$add_all, {
-      values <- column_values()
-      if (length(values) > 1) {
+      vals <- column_values()
+      if (length(vals) > 1) {
         clear_all_rows()
-        comb <- t(combn(values, 2))
-        for (i in 1:nrow(comb)) {
-          add_row_ui(num = comb[i, 1], den = comb[i, 2], index = i)
-        }
-        row_count(nrow(comb))
+        comb <- t(combn(vals, 2))
+        apply(comb, 1, function(row) add_row_ui(num = row[1], den = row[2]))
       }
     })
     
-    observeEvent(input$remove_all, {
-      clear_all_rows()
-    })
+    observeEvent(input$remove_all, { clear_all_rows() })
     
     return(reactive(rv$rows))
   })
 }
 
+step2UI <- function(id) {
+  ns <- NS(id)
+  
+  tagList(
+      h4("Sample Comparisons:"),
+      uiOutput(ns("add_sample_comp_ui")),
+      br(), br(),
+      div(id = ns("sample_cards_container"), class = "row"),
+      
+      fluidRow(column(12, hr())),
+      
+      h4("Cluster Comparisons:"),
+      uiOutput(ns("add_cluster_comp_ui")),
+      br(), br(),
+      div(id = ns("cluster_cards_container"), class = "row"),
+      
+    fluidRow(
+      column(12,hr()),
+      column(
+        12,
+        actionButton(
+          "back_step",
+          "Back to Step 1",
+          class = "btn-warning",
+          style = "width:200px;"
+        )
+      ))
+  )
+}
+
+# ----------------- Step2 Server Module -----------------
+step2Server <- function(id, sample_rows, cluster_rows, sample_meta, cluster_meta) {
+  moduleServer(id, function(input, output, session) {
+    ns <- session$ns
+    
+    output$add_sample_comp_ui <- renderUI({
+      rows <- sample_rows()
+      if (is.null(rows) || length(rows) == 0){
+        div(
+          style = "color:#555; font-style:italic;",
+          "No sample comparisons found. You can add comparisons in Step 1 using the 'Back to Step 1' button."
+        )
+      }else{
+        actionButton(
+          ns("add_sample_comp"),
+          "Add Comparison",
+          class = "btn-primary"
+        )
+      }
+    })
+    
+    output$add_cluster_comp_ui <- renderUI({
+      rows <- cluster_rows()
+      if (is.null(rows) || length(rows) == 0){
+        div(
+          style = "color:#555; font-style:italic;",
+          "No celltype cluster comparisons found. You can add comparisons in Step 1 using the 'Back to Step 1' button."
+        )
+      }else{
+        actionButton(
+          ns("add_cluster_comp"),
+          "Add Comparison",
+          class = "btn-primary"
+        )
+      }
+    })
+    
+    # Helper: Create card UI
+    createCard <- function(card_title, available_comps, meta_choices, card_id, is_sample = TRUE) {
+      # Create checkbox choices from all available comparisons
+      comp_choices <- list()
+      for (comp in available_comps) {
+        comp_choices[[comp$name]] <- comp$id
+      }
+      
+      div(
+        id = ns(card_id),  # Add ID to the main div for easy removal
+        class = "col-sm-4",  
+        style = "margin-bottom: 15px;",
+        wellPanel(
+          h5(card_title, style = "margin-top: 0; font-weight: bold;"),
+          
+          selectInput(
+            ns(paste0(card_id, "_meta_selector")),  # Use underscore instead of hyphen for easier referencing
+            label = ifelse(is_sample, "Select clusters to compare in:", "Select samples to compare in:"),
+            choices = meta_choices,
+            selected = NULL,
+            multiple = TRUE,
+            width = "100%"
+          ),
+          
+          checkboxGroupInput(
+            ns(paste0(card_id, "_comparison_checkboxes")),
+            label = "Select comparisons to perform:",
+            choices = comp_choices,
+            selected = NULL,
+            width = "100%"
+          ),
+          
+          fluidRow(
+            column(6, actionButton(ns(paste0(card_id, "_select_all")), "Select All", 
+                                   class = "btn-sm btn-primary", width = "100%")),
+            column(6, actionButton(ns(paste0(card_id, "_clear_all")), "Clear", 
+                                   class = "btn-sm btn-warning", width = "100%"))
+          ),
+          br(),
+          actionButton(ns(paste0(card_id, "_delete")), "Delete", 
+                       class = "btn-danger", style = "width:100%; margin-top:5px;")
+        )
+      )
+    }
+    
+    # Get all valid sample comparisons from Step1
+    all_sample_comps <- reactive({
+      comps <- sample_rows()
+      comps <- comps[sapply(comps, function(x) !is.null(x$numerator) && !is.null(x$denominator))]
+      
+      comp_list <- list()
+      for (i in seq_along(comps)) {
+        comp <- comps[[i]]
+        comp_id <- paste0("S", i, "_", comp$numerator, "_vs_", comp$denominator)
+        comp_name <- paste0("S", i, ": ", comp$numerator, " vs ", comp$denominator)
+        comp_list[[i]] <- list(id = comp_id, name = comp_name, 
+                               numerator = comp$numerator, denominator = comp$denominator)
+      }
+      comp_list
+    })
+    
+    # Get all valid cluster comparisons from Step1
+    all_cluster_comps <- reactive({
+      comps <- cluster_rows()
+      comps <- comps[sapply(comps, function(x) !is.null(x$numerator) && !is.null(x$denominator))]
+      
+      comp_list <- list()
+      for (i in seq_along(comps)) {
+        comp <- comps[[i]]
+        comp_id <- paste0("C", i, "_", comp$numerator, "_vs_", comp$denominator)
+        comp_name <- paste0("C", i, ": ", comp$numerator, " vs ", comp$denominator)
+        comp_list[[i]] <- list(id = comp_id, name = comp_name, 
+                               numerator = comp$numerator, denominator = comp$denominator)
+      }
+      comp_list
+    })
+    
+    # ----------------- Sample Cards Management -----------------
+    sample_cards <- reactiveValues(ids = character(0), data = list())
+    
+    # Add new sample comparison card
+    observeEvent(input$add_sample_comp, {
+      sample_comps <- all_sample_comps()
+      if (length(sample_comps) == 0) {
+        showModal(modalDialog(
+          title = "No Sample comparisons", 
+          "Please add at least one sample comparison in Step1."
+        ))
+        return()
+      }
+      
+      card_id <- paste0("sample_card_", length(sample_cards$ids) + 1)
+      sample_cards$ids <- c(sample_cards$ids, card_id)
+      
+      sample_cards$data[[card_id]] <- list(
+        type = "sample",
+        selected_comps = character(0),
+        selected_meta = character(0)
+      )
+      
+      # Insert the card UI
+      insertUI(
+        selector = paste0("#", ns("sample_cards_container")),
+        ui = createCard(
+          card_title = "Sample Comparisons",
+          available_comps = sample_comps,
+          meta_choices = sample_meta(),
+          card_id = card_id,
+          is_sample = TRUE
+        ),
+        immediate = TRUE
+      )
+      
+      # Set up observers for this card
+      setupCardObservers(card_id, "sample", sample_cards, all_sample_comps)
+    })
+    
+    # ----------------- Cluster Cards Management -----------------
+    cluster_cards <- reactiveValues(ids = character(0), data = list())
+    
+    # Add new cluster comparison card
+    observeEvent(input$add_cluster_comp, {
+      cluster_comps <- all_cluster_comps()
+      if (length(cluster_comps) == 0) {
+        showModal(modalDialog(
+          title = "No Cluster comparisons", 
+          "Please add at least one cluster comparison in Step1."
+        ))
+        return()
+      }
+      
+      card_id <- paste0("cluster_card_", length(cluster_cards$ids) + 1)
+      cluster_cards$ids <- c(cluster_cards$ids, card_id)
+      
+      cluster_cards$data[[card_id]] <- list(
+        type = "cluster",
+        selected_comps = character(0),
+        selected_meta = character(0)
+      )
+      
+      # Insert the card UI
+      insertUI(
+        selector = paste0("#", ns("cluster_cards_container")),
+        ui = createCard(
+          card_title = "Cluster Comparisons",
+          available_comps = cluster_comps,
+          meta_choices = cluster_meta(),
+          card_id = card_id,
+          is_sample = FALSE
+        ),
+        immediate = TRUE
+      )
+      
+      # Set up observers for this card
+      setupCardObservers(card_id, "cluster", cluster_cards, all_cluster_comps)
+    })
+    
+    # Helper function to set up card observers
+    setupCardObservers <- function(card_id, card_type, cards_reactive, all_comps_func) {
+      
+      # Create input ID patterns
+      delete_id <- paste0(card_id, "_delete")
+      select_id <- paste0(card_id, "_select_all")
+      clear_id <- paste0(card_id, "_clear_all")
+      checkbox_id <- paste0(card_id, "_comparison_checkboxes")
+      meta_id <- paste0(card_id, "_meta_selector")
+      
+      # Delete observer
+      observeEvent(input[[delete_id]], {
+        removeUI(selector = paste0("#", ns(card_id)))
+        cards_reactive$ids <- setdiff(cards_reactive$ids, card_id)
+        cards_reactive$data[[card_id]] <- NULL
+      }, ignoreInit = TRUE)
+      
+      # Select All observer
+      observeEvent(input[[select_id]], {
+        all_comp_choices <- sapply(all_comps_func(), function(x) x$id)
+        
+        updateCheckboxGroupInput(
+          session,
+          checkbox_id,
+          selected = all_comp_choices
+        )
+        
+        if (!is.null(cards_reactive$data[[card_id]])) {
+          cards_reactive$data[[card_id]]$selected_comps <- all_comp_choices
+        }
+      }, ignoreInit = TRUE)
+      
+      # Clear All observer
+      observeEvent(input[[clear_id]], {
+        updateCheckboxGroupInput(
+          session,
+          checkbox_id,
+          selected = character(0)
+        )
+        
+        if (!is.null(cards_reactive$data[[card_id]])) {
+          cards_reactive$data[[card_id]]$selected_comps <- character(0)
+        }
+      }, ignoreInit = TRUE)
+      
+      # Monitor checkbox changes
+      observeEvent(input[[checkbox_id]], {
+        selected <- input[[checkbox_id]]
+        if (!is.null(cards_reactive$data[[card_id]])) {
+          cards_reactive$data[[card_id]]$selected_comps <- selected
+        }
+      }, ignoreNULL = FALSE)
+      
+      # Monitor meta selector changes
+      observeEvent(input[[meta_id]], {
+        selected <- input[[meta_id]]
+        if (!is.null(cards_reactive$data[[card_id]])) {
+          cards_reactive$data[[card_id]]$selected_meta <- selected
+        }
+      }, ignoreNULL = FALSE)
+    }
+    
+    # Return all selected data
+    return(
+      list(
+        sample_cards_data = reactive(sample_cards$data),
+        cluster_cards_data = reactive(cluster_cards$data),
+        all_sample_comps = all_sample_comps,
+        all_cluster_comps = all_cluster_comps
+      )
+    )
+  })
+}
 # ============================================================
 # ------------------------- UI -------------------------------
 # ============================================================
@@ -254,7 +525,6 @@ server <- function(input, output, session) {
     # Check if at least one comparison is selected (not NULL)
     has_sample <- any(sapply(sample_comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator)))
     has_cluster <- any(sapply(cluster_comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator)))
-    
     if (!has_sample && !has_cluster) {
       showModal(modalDialog(
         title = "No Comparisons Selected",
@@ -262,7 +532,15 @@ server <- function(input, output, session) {
         easyClose = TRUE,
         footer = modalButton("OK")
       ))
-    } else {
+    }else if(input$sample_column == "" | input$cluster_column == ""){
+      showModal(modalDialog(
+        title = "Sample meta.data or Cluster meta.data was selected.",
+        "Please make sure you have select meta.data for both sample and cluster.",
+        easyClose = TRUE,
+        footer = modalButton("OK")
+      ))
+    }
+    else {
       shinyjs::hide("step1_ui")
       shinyjs::show("step2_ui")
     }
@@ -296,54 +574,19 @@ server <- function(input, output, session) {
         ),
         
         # Step 2 (hidden initially)
-        div(id = "step2_ui", style = "display: none;",
-            h4("Sample Comparisons:"),
-            uiOutput("sample_comparisons_summary"),
-            hr(),
-            h4("Cluster Comparisons:"),
-            uiOutput("cluster_comparisons_summary"),
-            hr(),
-            actionButton("back_step", "Back to Step 1", class = "btn-warning", style = "width:200px;")
-        )
+        div(id = "step2_ui", style="display:none;", step2UI("step2_module"))
       )
     }
   })
   
-  # ----------------- Generate comparison summaries -----------------
-  output$sample_comparisons_summary <- renderUI({
-    comparisons <- sample_rows()
-    # Filter out rows with NULL values
-    valid_comparisons <- comparisons[sapply(comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator))]
-    
-    if (length(valid_comparisons) == 0) {
-      return(p("No valid sample comparisons selected."))
-    }
-    
-    tags$ul(
-      lapply(seq_along(valid_comparisons), function(i) {
-        comp <- valid_comparisons[[i]]
-        tags$li(sprintf("Comparison %d: %s vs %s", i, comp$numerator, comp$denominator))
-      })
-    )
-  })
-  
-  output$cluster_comparisons_summary <- renderUI({
-    comparisons <- cluster_rows()
-    # Filter out rows with NULL values
-    valid_comparisons <- comparisons[sapply(comparisons, function(x) !is.null(x$numerator) && !is.null(x$denominator))]
-    
-    if (length(valid_comparisons) == 0) {
-      return(p("No valid cluster comparisons selected."))
-    }
-    
-    tags$ul(
-      lapply(seq_along(valid_comparisons), function(i) {
-        comp <- valid_comparisons[[i]]
-        tags$li(sprintf("Comparison %d: %s vs %s", i, comp$numerator, comp$denominator))
-      })
-    )
-  })
-  
+  step2Server(
+    "step2_module",
+    sample_rows = sample_rows,
+    cluster_rows = cluster_rows,
+    sample_meta = cluster_values, 
+    cluster_meta = sample_values  
+  )
+
   # ----------------- Visualization UI -----------------
   output$visualization_ui <- renderUI({
     if (is.null(data_obj())) {
@@ -354,6 +597,7 @@ server <- function(input, output, session) {
       )
     }
   })
+  
 }
 
 shinyApp(ui, server)
